@@ -142,7 +142,9 @@
     <p class="hint">
       기대하는 형식: 시트(탭) 하나 = 챕터(Day) 하나, 시트 이름이 곧 챕터 이름(예: <code>Day1</code>)이 됩니다.
       각 시트의 <b>A열 = 영단어</b>, <b>B열 = 뜻</b>으로 인식합니다.
-      파일 여러 개를 한 번에 올려도 되고, 한 파일에 여러 시트가 있어도 됩니다.
+      파일 여러 개를 한 번에 올려도 되고, 한 파일에 여러 시트가 있어도 됩니다.<br/>
+      <b>index.html과 같은 폴더에 <code>words.xlsx</code> 파일을 커밋해두면, 페이지가 열릴 때 자동으로 불러옵니다.</b>
+      (파일을 그냥 컴퓨터에서 더블클릭해 로컬로 열 때는 브라우저 보안 정책상 자동 로드가 안 될 수 있어요 — 그럴 땐 아래에서 직접 업로드하면 돼요.)
     </p>
     <div class="field-check">
       <input type="checkbox" id="skipHeaderCheck" />
@@ -240,6 +242,42 @@ const previewCard = document.getElementById('previewCard');
 const genStatus = document.getElementById('genStatus');
 const printArea = document.getElementById('printArea');
 
+function parseWorkbookIntoChapters(wb) {
+  const skipHeader = document.getElementById('skipHeaderCheck').checked;
+  const startRow = skipHeader ? 1 : 0;
+  wb.SheetNames.forEach(sheetName => {
+    const sheet = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const words = [];
+    for (let i = startRow; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const word = (row[0] ?? '').toString().trim();
+      const meaning = (row[1] ?? '').toString().trim();
+      if (word && meaning) words.push({ word, meaning });
+    }
+    if (words.length) {
+      if (!chapters[sheetName]) chapters[sheetName] = [];
+      chapters[sheetName] = chapters[sheetName].concat(words);
+    }
+  });
+}
+
+function finalizeLoad(prefix) {
+  const chapterNames = Object.keys(chapters);
+  if (!chapterNames.length) {
+    uploadStatus.textContent = '단어를 찾지 못했어요. 시트 구조(A열 단어, B열 뜻)를 확인해주세요.';
+    uploadStatus.className = 'status err';
+    return;
+  }
+  selected = new Set(chapterNames);
+  renderChapters();
+  uploadStatus.textContent = `${prefix}${chapterNames.length}개 챕터, 총 ${chapterNames.reduce((s,c)=>s+chapters[c].length,0)}개 단어를 불러왔어요.`;
+  uploadStatus.className = 'status ok';
+  chapterCard.style.display = 'block';
+  optionCard.style.display = 'block';
+}
+
 fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
@@ -249,43 +287,31 @@ fileInput.addEventListener('change', async (e) => {
     for (const file of files) {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });
-      wb.SheetNames.forEach(sheetName => {
-        const sheet = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-        const words = [];
-        const skipHeader = document.getElementById('skipHeaderCheck').checked;
-        const startRow = skipHeader ? 1 : 0;
-        for (let i = startRow; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row) continue;
-          const word = (row[0] ?? '').toString().trim();
-          const meaning = (row[1] ?? '').toString().trim();
-          if (word && meaning) words.push({ word, meaning });
-        }
-        if (words.length) {
-          if (!chapters[sheetName]) chapters[sheetName] = [];
-          chapters[sheetName] = chapters[sheetName].concat(words);
-        }
-      });
+      parseWorkbookIntoChapters(wb);
     }
-    const chapterNames = Object.keys(chapters);
-    if (!chapterNames.length) {
-      uploadStatus.textContent = '단어를 찾지 못했어요. 시트 구조(1행 제목, A열 단어, B열 뜻)를 확인해주세요.';
-      uploadStatus.className = 'status err';
-      return;
-    }
-    selected = new Set(chapterNames);
-    renderChapters();
-    uploadStatus.textContent = `${chapterNames.length}개 챕터, 총 ${chapterNames.reduce((s,c)=>s+chapters[c].length,0)}개 단어를 불러왔어요.`;
-    uploadStatus.className = 'status ok';
-    chapterCard.style.display = 'block';
-    optionCard.style.display = 'block';
+    finalizeLoad('');
   } catch (err) {
     console.error(err);
     uploadStatus.textContent = '파일을 읽는 중 오류가 발생했어요: ' + err.message;
     uploadStatus.className = 'status err';
   }
 });
+
+// 같은 폴더에 words.xlsx가 있으면(예: GitHub Pages에 커밋해둔 경우) 자동으로 불러온다.
+// file:// 로 로컬에서 직접 열었을 때는 브라우저 보안 정책상 fetch가 막힐 수 있어 조용히 무시하고 수동 업로드로 넘어간다.
+const DEFAULT_WORDS_FILE = 'words.xlsx';
+(async function tryAutoLoadDefault() {
+  try {
+    const res = await fetch(DEFAULT_WORDS_FILE);
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    parseWorkbookIntoChapters(wb);
+    finalizeLoad(`"${DEFAULT_WORDS_FILE}" 자동 불러오기 — `);
+  } catch (err) {
+    // 기본 파일이 없거나 로컬 환경 — 그냥 수동 업로드를 기다린다.
+  }
+})();
 
 function naturalDaySort(names) {
   return names.sort((a, b) => {
