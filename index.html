@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>TOEIC 단어 시험지 생성기</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root{
     --bg:#f5f6fa;
@@ -217,13 +219,20 @@
     <div class="step-title"><span class="step-badge">4</span> 미리보기 &amp; PDF 저장</div>
     <div class="btn-row" style="margin-bottom:16px;">
       <button class="btn ghost" id="reshuffleBtn">다시 랜덤 뽑기</button>
-      <button class="btn primary" id="printBtn">PDF로 저장 (인쇄)</button>
+      <button class="btn primary" id="printBtn">PDF로 저장</button>
+      <button class="btn ghost" id="browserPrintBtn">브라우저 인쇄로 저장</button>
     </div>
     <p class="hint">
-      "PDF로 저장"을 누르면 인쇄 대화상자가 열립니다. 프린터 선택에서 <b>"PDF로 저장"</b>을 선택하면 파일로 저장됩니다.
+      "PDF로 저장"은 화면에 보이는 레이아웃(2단 정렬 포함)을 그대로 이미지로 캡처해서 실제 PDF 파일로 바로 다운로드해요.
+      모바일 사파리에서도 2단 레이아웃이 그대로 유지됩니다.
+      혹시 실물 프린터로 바로 인쇄하고 싶으면 "브라우저 인쇄로 저장"을 쓰세요 (이 경우 기기별로 2단 정렬이 깨질 수 있어요).
     </p>
+    <div id="pdfStatus" class="status"></div>
     <div id="printArea"></div>
   </div>
+
+  <!-- offscreen container used only for PDF capture, fixed A4-like width regardless of device screen size -->
+  <div id="exportArea" style="position:fixed; left:-99999px; top:0; width:794px; background:#fff; padding:40px;"></div>
 
 </div>
 
@@ -467,8 +476,68 @@ document.getElementById('reshuffleBtn').addEventListener('click', () => {
   renderPreview(blocks);
 });
 
-document.getElementById('printBtn').addEventListener('click', () => {
+document.getElementById('browserPrintBtn').addEventListener('click', () => {
   window.print();
+});
+
+const pdfStatus = document.getElementById('pdfStatus');
+const exportArea = document.getElementById('exportArea');
+const PAGE_W = 794;   // A4 width in CSS px at 96dpi
+const PAGE_H = 1124;  // A4 height in CSS px at 96dpi
+
+document.getElementById('printBtn').addEventListener('click', async () => {
+  if (!printArea.innerHTML.trim()) return;
+  const btn = document.getElementById('printBtn');
+  btn.disabled = true;
+  btn.textContent = 'PDF 생성 중...';
+  pdfStatus.textContent = '';
+  pdfStatus.className = 'status';
+  try {
+    // 실제 화면에 보이는 레이아웃(2단 포함)을 고정 폭(A4 비율) 컨테이너에 그대로 복제해서 캡처한다.
+    // 브라우저 print 파이프라인을 타지 않으므로 모바일 사파리에서도 컬럼 레이아웃이 깨지지 않는다.
+    exportArea.innerHTML = printArea.innerHTML;
+    await new Promise(r => setTimeout(r, 50)); // 레이아웃 반영 대기
+
+    const scale = 2;
+    const canvas = await html2canvas(exportArea, {
+      scale,
+      backgroundColor: '#ffffff',
+      windowWidth: PAGE_W + 80
+    });
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: 'px', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
+    const pageHeightScaled = PAGE_H * scale;
+    let y = 0;
+    let first = true;
+    while (y < canvas.height) {
+      const sliceH = Math.min(pageHeightScaled, canvas.height - y);
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = sliceH;
+      const ctx = pageCanvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      ctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      const dataUrl = pageCanvas.toDataURL('image/png');
+      if (!first) pdf.addPage([PAGE_W, PAGE_H], 'portrait');
+      pdf.addImage(dataUrl, 'PNG', 0, 0, PAGE_W, sliceH / scale);
+      first = false;
+      y += pageHeightScaled;
+    }
+
+    const title = (document.getElementById('titleInput').value || 'toeic-test').trim();
+    pdf.save(`${title}.pdf`);
+    pdfStatus.textContent = 'PDF 파일이 다운로드되었어요.';
+    pdfStatus.className = 'status ok';
+  } catch (err) {
+    console.error(err);
+    pdfStatus.textContent = 'PDF 생성 중 오류가 발생했어요: ' + err.message;
+    pdfStatus.className = 'status err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'PDF로 저장';
+  }
 });
 </script>
 </body>
