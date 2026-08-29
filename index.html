@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TOEIC 단어 시험지 생성기</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f5f6fa;
+    --card:#ffffff;
+    --ink:#1b1e27;
+    --sub:#6b7280;
+    --accent:#3454d1;
+    --accent-soft:#eaeefd;
+    --border:#e3e6ec;
+    --danger:#d1495b;
+    --ok:#2f9e63;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",sans-serif;
+    line-height:1.5;
+    padding:32px 16px 96px;
+  }
+  .wrap{max-width:880px;margin:0 auto;}
+  header.page-head{margin-bottom:28px;}
+  header.page-head h1{font-size:22px;margin:0 0 4px;}
+  header.page-head p{margin:0;color:var(--sub);font-size:14px;}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:22px 24px;
+    margin-bottom:18px;
+  }
+  .step-title{
+    display:flex;align-items:center;gap:10px;
+    font-size:15px;font-weight:700;margin-bottom:14px;
+  }
+  .step-badge{
+    width:22px;height:22px;border-radius:50%;
+    background:var(--accent);color:#fff;
+    font-size:12px;display:flex;align-items:center;justify-content:center;
+    flex:none;
+  }
+  .hint{font-size:13px;color:var(--sub);margin:0 0 14px;}
+  .hint code{background:var(--accent-soft);padding:1px 5px;border-radius:4px;}
+
+  input[type="file"]{
+    display:block;width:100%;padding:12px;border:1.5px dashed var(--border);
+    border-radius:10px;background:#fbfbfd;font-size:13px;
+  }
+
+  .chapter-toolbar{display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px;}
+  .chapter-toolbar .count{font-size:13px;color:var(--sub);}
+  .chapter-grid{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+    gap:8px;max-height:280px;overflow-y:auto;padding:2px;
+  }
+  .chapter-chip{
+    border:1px solid var(--border);border-radius:10px;padding:9px 10px;
+    display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;
+    background:#fbfbfd;user-select:none;
+  }
+  .chapter-chip.selected{border-color:var(--accent);background:var(--accent-soft);}
+  .chapter-chip input{margin:0;}
+  .chapter-chip .n{color:var(--sub);font-size:12px;margin-left:auto;}
+
+  .btn{
+    border:none;border-radius:10px;padding:10px 16px;font-size:13.5px;font-weight:600;
+    cursor:pointer;background:var(--accent-soft);color:var(--accent);
+  }
+  .btn:hover{filter:brightness(0.97);}
+  .btn.primary{background:var(--accent);color:#fff;}
+  .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--ink);}
+  .btn:disabled{opacity:0.45;cursor:not-allowed;}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;}
+
+  .opt-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media (max-width:560px){.opt-grid{grid-template-columns:1fr;}}
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+  .field label{font-size:13px;font-weight:600;color:var(--ink);}
+  .field select, .field input[type="number"], .field input[type="text"]{
+    padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:13.5px;
+  }
+  .field-check{display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:12px;}
+
+  .status{font-size:13px;margin-top:10px;}
+  .status.ok{color:var(--ok);}
+  .status.err{color:var(--danger);}
+
+  /* ---------- Preview / print area ---------- */
+  #previewCard{display:none;}
+  #printArea{background:#fff;padding:8px;}
+  .paper-head{text-align:center;margin-bottom:18px;padding-bottom:14px;border-bottom:2px solid #222;}
+  .paper-head h2{margin:0 0 10px;font-size:20px;letter-spacing:1px;}
+  .paper-meta{display:flex;justify-content:space-between;font-size:13px;color:#333;margin-top:10px;}
+  .paper-meta span{border-bottom:1px solid #999;padding-bottom:2px;min-width:120px;display:inline-block;}
+
+  .chap-section{margin-bottom:20px;}
+  .chap-section h3{
+    font-size:14px;background:#f0f1f5;padding:6px 10px;border-radius:6px;margin:0 0 10px;
+  }
+  .q-list{list-style:none;margin:0;padding:0;columns:2;column-gap:28px;}
+  .q-list li{
+    break-inside:avoid;font-size:14px;margin-bottom:12px;display:flex;align-items:baseline;gap:6px;
+  }
+  .q-list .no{color:#555;font-variant-numeric:tabular-nums;min-width:22px;}
+  .q-list .blank{
+    flex:1;border-bottom:1px solid #999;min-width:60px;display:inline-block;height:1.1em;
+  }
+  .page-break{page-break-before:always;}
+  .answer-title{font-size:16px;font-weight:700;margin-bottom:14px;text-align:center;}
+  .answer-list{list-style:none;margin:0;padding:0;columns:3;column-gap:20px;font-size:13px;}
+  .answer-list li{break-inside:avoid;margin-bottom:6px;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{position:absolute;left:0;top:0;width:100%;padding:0;}
+    body{padding:0;background:#fff;}
+    .q-list{columns:2;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <h1>TOEIC 단어 시험지 생성기</h1>
+    <p>Day1~Day30 챕터별 엑셀 단어를 업로드하면, 랜덤으로 뽑아 시험지 PDF를 만들어줘요.</p>
+  </header>
+
+  <!-- Step 1: Upload -->
+  <div class="card">
+    <div class="step-title"><span class="step-badge">1</span> 엑셀 파일 업로드</div>
+    <p class="hint">
+      기대하는 형식: 시트(탭) 하나 = 챕터(Day) 하나, 시트 이름이 곧 챕터 이름(예: <code>Day1</code>)이 됩니다.
+      각 시트의 <b>A열 = 영단어</b>, <b>B열 = 뜻</b>으로 인식합니다.
+      파일 여러 개를 한 번에 올려도 되고, 한 파일에 여러 시트가 있어도 됩니다.
+    </p>
+    <div class="field-check">
+      <input type="checkbox" id="skipHeaderCheck" />
+      <label for="skipHeaderCheck">1행은 제목행이라 건너뛰기 (체크 해제 시 1행부터 단어로 인식)</label>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" multiple />
+    <div id="uploadStatus" class="status"></div>
+  </div>
+
+  <!-- Step 2: Chapters -->
+  <div class="card" id="chapterCard" style="display:none;">
+    <div class="step-title"><span class="step-badge">2</span> 챕터 선택</div>
+    <div class="chapter-toolbar">
+      <div class="btn-row">
+        <button class="btn ghost" id="selectAllBtn">전체 선택</button>
+        <button class="btn ghost" id="selectNoneBtn">전체 해제</button>
+      </div>
+      <div class="count" id="chapterCount"></div>
+    </div>
+    <div class="chapter-grid" id="chapterGrid"></div>
+  </div>
+
+  <!-- Step 3: Options -->
+  <div class="card" id="optionCard" style="display:none;">
+    <div class="step-title"><span class="step-badge">3</span> 시험지 옵션</div>
+    <div class="opt-grid">
+      <div class="field">
+        <label>시험지 제목</label>
+        <input type="text" id="titleInput" value="TOEIC 단어 시험" />
+      </div>
+      <div class="field">
+        <label>챕터당 문항 수</label>
+        <input type="number" id="countInput" min="1" value="10" />
+      </div>
+      <div class="field">
+        <label>문제 유형</label>
+        <select id="typeSelect">
+          <option value="e2k">영단어 → 뜻 쓰기</option>
+          <option value="k2e">뜻 → 영단어 쓰기</option>
+          <option value="mixed">랜덤 혼합 (문항마다 랜덤)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>챕터당 단어 수보다 문항 수가 많을 때</label>
+        <select id="overflowSelect">
+          <option value="cap">해당 챕터 단어 전부 사용</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-check">
+      <input type="checkbox" id="metaCheck" checked />
+      <label for="metaCheck">이름 / 날짜 / 점수 칸 표시</label>
+    </div>
+    <div class="field-check">
+      <input type="checkbox" id="answerKeyCheck" checked />
+      <label for="answerKeyCheck">시험지 뒤에 정답지 포함</label>
+    </div>
+    <div class="field-check">
+      <input type="checkbox" id="pageBreakCheck" checked />
+      <label for="pageBreakCheck">챕터마다 새 페이지로 나누기</label>
+    </div>
+    <div class="btn-row">
+      <button class="btn primary" id="generateBtn">시험지 생성</button>
+    </div>
+    <div id="genStatus" class="status"></div>
+  </div>
+
+  <!-- Step 4: Preview / export -->
+  <div class="card" id="previewCard">
+    <div class="step-title"><span class="step-badge">4</span> 미리보기 &amp; PDF 저장</div>
+    <div class="btn-row" style="margin-bottom:16px;">
+      <button class="btn ghost" id="reshuffleBtn">다시 랜덤 뽑기</button>
+      <button class="btn primary" id="printBtn">PDF로 저장 (인쇄)</button>
+    </div>
+    <p class="hint">
+      "PDF로 저장"을 누르면 인쇄 대화상자가 열립니다. 프린터 선택에서 <b>"PDF로 저장"</b>을 선택하면 파일로 저장됩니다.
+    </p>
+    <div id="printArea"></div>
+  </div>
+
+</div>
+
+<script>
+let chapters = {};      // { chapterName: [{word, meaning}] }
+let selected = new Set();
+let lastQuestions = null;
+
+const fileInput = document.getElementById('fileInput');
+const uploadStatus = document.getElementById('uploadStatus');
+const chapterCard = document.getElementById('chapterCard');
+const chapterGrid = document.getElementById('chapterGrid');
+const chapterCount = document.getElementById('chapterCount');
+const optionCard = document.getElementById('optionCard');
+const previewCard = document.getElementById('previewCard');
+const genStatus = document.getElementById('genStatus');
+const printArea = document.getElementById('printArea');
+
+fileInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  uploadStatus.textContent = '읽는 중...';
+  uploadStatus.className = 'status';
+  try {
+    for (const file of files) {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      wb.SheetNames.forEach(sheetName => {
+        const sheet = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const words = [];
+        const skipHeader = document.getElementById('skipHeaderCheck').checked;
+        const startRow = skipHeader ? 1 : 0;
+        for (let i = startRow; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row) continue;
+          const word = (row[0] ?? '').toString().trim();
+          const meaning = (row[1] ?? '').toString().trim();
+          if (word && meaning) words.push({ word, meaning });
+        }
+        if (words.length) {
+          if (!chapters[sheetName]) chapters[sheetName] = [];
+          chapters[sheetName] = chapters[sheetName].concat(words);
+        }
+      });
+    }
+    const chapterNames = Object.keys(chapters);
+    if (!chapterNames.length) {
+      uploadStatus.textContent = '단어를 찾지 못했어요. 시트 구조(1행 제목, A열 단어, B열 뜻)를 확인해주세요.';
+      uploadStatus.className = 'status err';
+      return;
+    }
+    selected = new Set(chapterNames);
+    renderChapters();
+    uploadStatus.textContent = `${chapterNames.length}개 챕터, 총 ${chapterNames.reduce((s,c)=>s+chapters[c].length,0)}개 단어를 불러왔어요.`;
+    uploadStatus.className = 'status ok';
+    chapterCard.style.display = 'block';
+    optionCard.style.display = 'block';
+  } catch (err) {
+    console.error(err);
+    uploadStatus.textContent = '파일을 읽는 중 오류가 발생했어요: ' + err.message;
+    uploadStatus.className = 'status err';
+  }
+});
+
+function naturalDaySort(names) {
+  return names.sort((a, b) => {
+    const na = (a.match(/\d+/) || [])[0];
+    const nb = (b.match(/\d+/) || [])[0];
+    if (na && nb) return parseInt(na) - parseInt(nb);
+    if (na && !nb) return -1;
+    if (!na && nb) return 1;
+    return a.localeCompare(b, 'ko');
+  });
+}
+
+function renderChapters() {
+  const names = naturalDaySort(Object.keys(chapters));
+  chapterGrid.innerHTML = '';
+  names.forEach(name => {
+    const chip = document.createElement('label');
+    chip.className = 'chapter-chip' + (selected.has(name) ? ' selected' : '');
+    chip.innerHTML = `
+      <input type="checkbox" ${selected.has(name) ? 'checked' : ''} data-name="${name}" />
+      <span>${name}</span>
+      <span class="n">${chapters[name].length}개</span>
+    `;
+    chip.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selected.add(name); else selected.delete(name);
+      chip.classList.toggle('selected', e.target.checked);
+      updateChapterCount();
+    });
+    chapterGrid.appendChild(chip);
+  });
+  updateChapterCount();
+}
+
+function updateChapterCount() {
+  chapterCount.textContent = `${selected.size} / ${Object.keys(chapters).length}개 챕터 선택됨`;
+}
+
+document.getElementById('selectAllBtn').addEventListener('click', () => {
+  selected = new Set(Object.keys(chapters));
+  renderChapters();
+});
+document.getElementById('selectNoneBtn').addEventListener('click', () => {
+  selected = new Set();
+  renderChapters();
+});
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildQuestions() {
+  const count = Math.max(1, parseInt(document.getElementById('countInput').value) || 10);
+  const type = document.getElementById('typeSelect').value;
+  const names = naturalDaySort(Array.from(selected));
+  let qNo = 1;
+  const chapterBlocks = names.map(name => {
+    const pool = shuffle(chapters[name]).slice(0, count);
+    const items = pool.map(item => {
+      let qType = type;
+      if (type === 'mixed') qType = Math.random() < 0.5 ? 'e2k' : 'k2e';
+      const q = {
+        no: qNo++,
+        chapter: name,
+        word: item.word,
+        meaning: item.meaning,
+        type: qType
+      };
+      return q;
+    });
+    return { name, items };
+  }).filter(block => block.items.length);
+  return chapterBlocks;
+}
+
+function renderPreview(blocks) {
+  const title = document.getElementById('titleInput').value || 'TOEIC 단어 시험';
+  const includeMeta = document.getElementById('metaCheck').checked;
+  const includeAnswers = document.getElementById('answerKeyCheck').checked;
+  const pageBreak = document.getElementById('pageBreakCheck').checked;
+
+  let html = `
+    <div class="paper-head">
+      <h2>${escapeHtml(title)}</h2>
+      ${includeMeta ? `
+      <div class="paper-meta">
+        <span>이름: </span>
+        <span>날짜: </span>
+        <span>점수: </span>
+      </div>` : ''}
+    </div>
+  `;
+
+  blocks.forEach((block, idx) => {
+    html += `<div class="chap-section${pageBreak && idx>0 ? ' page-break' : ''}">`;
+    html += `<h3>${escapeHtml(block.name)} (${block.items.length}문항)</h3>`;
+    html += `<ul class="q-list">`;
+    block.items.forEach(q => {
+      const prompt = q.type === 'e2k' ? q.word : q.meaning;
+      html += `<li><span class="no">${q.no}.</span> <span>${escapeHtml(prompt)}</span> <span class="blank"></span></li>`;
+    });
+    html += `</ul></div>`;
+  });
+
+  if (includeAnswers) {
+    html += `<div class="page-break">`;
+    html += `<div class="answer-title">정답지 — ${escapeHtml(title)}</div>`;
+    html += `<ul class="answer-list">`;
+    blocks.forEach(block => {
+      block.items.forEach(q => {
+        const answer = q.type === 'e2k' ? q.meaning : q.word;
+        html += `<li>${q.no}. ${escapeHtml(q.word)} - ${escapeHtml(q.meaning)}${''}</li>`;
+      });
+    });
+    html += `</ul></div>`;
+  }
+
+  printArea.innerHTML = html;
+  previewCard.style.display = 'block';
+}
+
+function escapeHtml(str) {
+  return (str ?? '').toString()
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+document.getElementById('generateBtn').addEventListener('click', () => {
+  if (!selected.size) {
+    genStatus.textContent = '챕터를 최소 1개 이상 선택해주세요.';
+    genStatus.className = 'status err';
+    return;
+  }
+  const blocks = buildQuestions();
+  if (!blocks.length) {
+    genStatus.textContent = '선택한 챕터에 단어가 없어요.';
+    genStatus.className = 'status err';
+    return;
+  }
+  lastQuestions = blocks;
+  renderPreview(blocks);
+  genStatus.textContent = `총 ${blocks.reduce((s,b)=>s+b.items.length,0)}문항 생성 완료!`;
+  genStatus.className = 'status ok';
+  previewCard.scrollIntoView({ behavior: 'smooth' });
+});
+
+document.getElementById('reshuffleBtn').addEventListener('click', () => {
+  const blocks = buildQuestions();
+  lastQuestions = blocks;
+  renderPreview(blocks);
+});
+
+document.getElementById('printBtn').addEventListener('click', () => {
+  window.print();
+});
+</script>
+</body>
+</html>
