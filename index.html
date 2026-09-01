@@ -106,7 +106,7 @@
 
   .chap-section{margin-bottom:20px;}
   .chap-section h3{
-    font-size:14px;background:#f0f1f5;padding:6px 10px;border-radius:6px;margin:0 0 10px;
+    font-size:14px;background:#f0f1f5;padding:6px 10px;border-radius:6px;margin:0 0 18px;
   }
   .q-list{list-style:none;margin:0;padding:0;columns:2;column-gap:28px;}
   .q-list li{
@@ -430,16 +430,17 @@ function renderPreview(blocks) {
   });
 
   if (includeAnswers) {
-    html += `<div class="page-break">`;
+    html += `<div class="page-break" id="answerSection">`;
     html += `<div class="answer-title">정답지 — ${escapeHtml(title)}</div>`;
-    html += `<ul class="answer-list">`;
     blocks.forEach(block => {
+      html += `<div class="chap-section"><h3>${escapeHtml(block.name)} (${block.items.length}문항)</h3>`;
+      html += `<ul class="answer-list">`;
       block.items.forEach(q => {
-        const answer = q.type === 'e2k' ? q.meaning : q.word;
-        html += `<li>${q.no}. ${escapeHtml(q.word)} - ${escapeHtml(q.meaning)}${''}</li>`;
+        html += `<li>${q.no}. ${escapeHtml(q.word)} - ${escapeHtml(q.meaning)}</li>`;
       });
+      html += `</ul></div>`;
     });
-    html += `</ul></div>`;
+    html += `</div>`;
   }
 
   printArea.innerHTML = html;
@@ -484,6 +485,10 @@ const pdfStatus = document.getElementById('pdfStatus');
 const exportArea = document.getElementById('exportArea');
 const PAGE_W = 794;   // A4 width in CSS px at 96dpi
 const PAGE_H = 1124;  // A4 height in CSS px at 96dpi
+const MARGIN_TOP = 45;
+const MARGIN_BOTTOM = 40;
+const CONTENT_H = PAGE_H - MARGIN_TOP - MARGIN_BOTTOM; // 페이지마다 남겨둘 여백을 뺀 실제 콘텐츠 높이
+const CONTENT_H_FIRST = PAGE_H - MARGIN_BOTTOM; // 첫 페이지는 위쪽 여백을 추가로 빼지 않음 (원래 컨테이너 패딩만 사용)
 
 document.getElementById('printBtn').addEventListener('click', async () => {
   if (!printArea.innerHTML.trim()) return;
@@ -498,6 +503,62 @@ document.getElementById('printBtn').addEventListener('click', async () => {
     exportArea.innerHTML = printArea.innerHTML;
     await new Promise(r => setTimeout(r, 50)); // 레이아웃 반영 대기
 
+    // 페이지를 나눌 때 단어 한 줄이 위/아래로 잘리지 않도록,
+    // "잘리면 안 되는 단위"(제목, 챕터 헤더, 각 문제 줄, 정답 줄)의 실제 위치를 재서
+    // 그 사이의 빈 틈에서만 페이지를 끊는다.
+    const containerRect = exportArea.getBoundingClientRect();
+    const atomEls = Array.from(exportArea.querySelectorAll('.paper-head, .chap-section h3, .q-list li, .answer-title, .answer-list li'));
+    const atoms = atomEls.map(el => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top - containerRect.top, bottom: r.bottom - containerRect.top };
+    });
+    const totalHeight = exportArea.scrollHeight;
+
+    function resolveSafeBreak(target, prevBreak) {
+      let guard = 0;
+      while (guard++ < 50) {
+        const straddler = atoms.find(a => a.top < target - 0.5 && a.bottom > target + 0.5);
+        if (!straddler) return target;
+        if (straddler.top <= prevBreak + 1) return target; // 한 줄이 페이지 하나보다 큰 예외적인 경우 - 어쩔 수 없이 그대로 자름
+        target = straddler.top;
+      }
+      return target;
+    }
+
+    function paginateRange(startY, endY, useFirstBudgetForFirstIter) {
+      const localBreaks = [];
+      let cursor = startY;
+      let isFirstIter = useFirstBudgetForFirstIter;
+      while (true) {
+        const budget = isFirstIter ? CONTENT_H_FIRST : CONTENT_H;
+        if (cursor + budget >= endY) break;
+        const safe = resolveSafeBreak(cursor + budget, cursor);
+        localBreaks.push(safe);
+        cursor = safe;
+        isFirstIter = false;
+      }
+      return localBreaks;
+    }
+
+    const answerEl = exportArea.querySelector('#answerSection');
+    let forcedBreakTop = null;
+    if (answerEl) {
+      const r = answerEl.getBoundingClientRect();
+      forcedBreakTop = r.top - containerRect.top;
+    }
+
+    let breaks = [0];
+    if (forcedBreakTop != null && forcedBreakTop > 0 && forcedBreakTop < totalHeight) {
+      // 정답지 시작 지점(forcedBreakTop)에서 무조건 새 페이지로 강제 분리
+      breaks = breaks.concat(paginateRange(0, forcedBreakTop, true));
+      breaks.push(forcedBreakTop);
+      breaks = breaks.concat(paginateRange(forcedBreakTop, totalHeight, false));
+      breaks.push(totalHeight);
+    } else {
+      breaks = breaks.concat(paginateRange(0, totalHeight, true));
+      breaks.push(totalHeight);
+    }
+
     const scale = 2;
     const canvas = await html2canvas(exportArea, {
       scale,
@@ -507,23 +568,26 @@ document.getElementById('printBtn').addEventListener('click', async () => {
 
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ unit: 'px', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
-    const pageHeightScaled = PAGE_H * scale;
-    let y = 0;
     let first = true;
-    while (y < canvas.height) {
-      const sliceH = Math.min(pageHeightScaled, canvas.height - y);
+    for (let i = 0; i < breaks.length - 1; i++) {
+      const sliceTop = breaks[i];
+      const sliceBottom = breaks[i + 1];
+      const sliceHeightUnscaled = sliceBottom - sliceTop;
+      if (sliceHeightUnscaled <= 0) continue;
+      const yScaled = Math.round(sliceTop * scale);
+      const hScaled = Math.min(Math.round(sliceHeightUnscaled * scale), canvas.height - yScaled);
       const pageCanvas = document.createElement('canvas');
       pageCanvas.width = canvas.width;
-      pageCanvas.height = sliceH;
+      pageCanvas.height = hScaled;
       const ctx = pageCanvas.getContext('2d');
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-      ctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      ctx.drawImage(canvas, 0, yScaled, canvas.width, hScaled, 0, 0, canvas.width, hScaled);
       const dataUrl = pageCanvas.toDataURL('image/png');
       if (!first) pdf.addPage([PAGE_W, PAGE_H], 'portrait');
-      pdf.addImage(dataUrl, 'PNG', 0, 0, PAGE_W, sliceH / scale);
+      const topOffset = (i === 0) ? 0 : MARGIN_TOP;
+      pdf.addImage(dataUrl, 'PNG', 0, topOffset, PAGE_W, hScaled / scale);
       first = false;
-      y += pageHeightScaled;
     }
 
     const title = (document.getElementById('titleInput').value || 'toeic-test').trim();
