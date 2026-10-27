@@ -116,6 +116,9 @@
   .q-list .blank{
     flex:1;border-bottom:1px solid #999;min-width:60px;display:inline-block;height:1.1em;
   }
+  .q-list .hint-pattern{
+    color:#8b8f99;font-size:12.5px;letter-spacing:1px;white-space:nowrap;flex:none;
+  }
   .page-break{page-break-before:always;}
   .answer-title{font-size:16px;font-weight:700;margin-bottom:14px;text-align:center;}
   .answer-list{list-style:none;margin:0;padding:0;columns:3;column-gap:20px;font-size:13px;}
@@ -143,22 +146,19 @@
     <div class="step-title"><span class="step-badge">1</span> 엑셀 파일 업로드</div>
     <p class="hint">
       기대하는 형식: 시트(탭) 하나 = 챕터(Day) 하나, 시트 이름이 곧 챕터 이름(예: <code>Day1</code>)이 됩니다.
-      각 시트의 <b>A열 = 영단어</b>, <b>B열 = 뜻</b>으로 인식합니다.
+      한 시트 안에서 <b>A:B, D:E, G:H, J:K</b> 열 쌍까지 최대 4개의 단어 영역(예: 핵심빈출단어 / 토익 기초 단어 / 800점 완성 단어 / 900점 완성 단어)을 자동으로 인식하고,
+      <b>1행의 글자를 그 영역의 이름</b>으로, <b>2행부터를 단어 데이터</b>로 읽습니다. 비어 있는 열 쌍은 자동으로 무시돼요.
       파일 여러 개를 한 번에 올려도 되고, 한 파일에 여러 시트가 있어도 됩니다.<br/>
       <b>index.html과 같은 폴더에 <code>words.xlsx</code> 파일을 커밋해두면, 페이지가 열릴 때 자동으로 불러옵니다.</b>
       (파일을 그냥 컴퓨터에서 더블클릭해 로컬로 열 때는 브라우저 보안 정책상 자동 로드가 안 될 수 있어요 — 그럴 땐 아래에서 직접 업로드하면 돼요.)
     </p>
-    <div class="field-check">
-      <input type="checkbox" id="skipHeaderCheck" />
-      <label for="skipHeaderCheck">1행은 제목행이라 건너뛰기 (체크 해제 시 1행부터 단어로 인식)</label>
-    </div>
     <input type="file" id="fileInput" accept=".xlsx,.xls" multiple />
     <div id="uploadStatus" class="status"></div>
   </div>
 
   <!-- Step 2: Chapters -->
   <div class="card" id="chapterCard" style="display:none;">
-    <div class="step-title"><span class="step-badge">2</span> 챕터 선택</div>
+    <div class="step-title"><span class="step-badge">2</span> 챕터(Day) 선택</div>
     <div class="chapter-toolbar">
       <div class="btn-row">
         <button class="btn ghost" id="selectAllBtn">전체 선택</button>
@@ -167,6 +167,20 @@
       <div class="count" id="chapterCount"></div>
     </div>
     <div class="chapter-grid" id="chapterGrid"></div>
+  </div>
+
+  <!-- Step 2.5: Categories -->
+  <div class="card" id="categoryCard" style="display:none;">
+    <div class="step-title"><span class="step-badge">2</span> 단어 영역 선택</div>
+    <p class="hint">선택한 영역에 속한 단어들만 시험 범위에 포함돼요 (챕터 안에 해당 영역이 없으면 자동으로 빠집니다).</p>
+    <div class="chapter-toolbar">
+      <div class="btn-row">
+        <button class="btn ghost" id="catSelectAllBtn">전체 선택</button>
+        <button class="btn ghost" id="catSelectNoneBtn">전체 해제</button>
+      </div>
+      <div class="count" id="categoryCount"></div>
+    </div>
+    <div class="chapter-grid" id="categoryGrid"></div>
   </div>
 
   <!-- Step 3: Options -->
@@ -185,7 +199,7 @@
         <label>문제 유형</label>
         <select id="typeSelect">
           <option value="e2k">영단어 → 뜻 쓰기</option>
-          <option value="k2e">뜻 → 영단어 쓰기</option>
+          <option value="k2e">뜻 → 영단어 쓰기 (첫 글자 힌트 제공)</option>
           <option value="mixed">랜덤 혼합 (문항마다 랜덤)</option>
         </select>
       </div>
@@ -237,37 +251,61 @@
 </div>
 
 <script>
-let chapters = {};      // { chapterName: [{word, meaning}] }
-let selected = new Set();
+let chapters = {};      // { chapterName: { categoryName: [{word, meaning}] } }
+let categoryOrder = []; // 발견된 순서를 기억해 선택 UI에 일관되게 표시
+let selected = new Set();        // 선택된 챕터(Day)
+let selectedCategories = new Set(); // 선택된 단어 영역
 let lastQuestions = null;
+
+// 한 시트 안에서 최대 4개 영역을 인식하는 열 쌍: A:B, D:E, G:H, J:K (0-indexed)
+const CATEGORY_COLUMN_GROUPS = [[0, 1], [3, 4], [6, 7], [9, 10]];
 
 const fileInput = document.getElementById('fileInput');
 const uploadStatus = document.getElementById('uploadStatus');
 const chapterCard = document.getElementById('chapterCard');
 const chapterGrid = document.getElementById('chapterGrid');
 const chapterCount = document.getElementById('chapterCount');
+const categoryCard = document.getElementById('categoryCard');
+const categoryGrid = document.getElementById('categoryGrid');
+const categoryCount = document.getElementById('categoryCount');
 const optionCard = document.getElementById('optionCard');
 const previewCard = document.getElementById('previewCard');
 const genStatus = document.getElementById('genStatus');
 const printArea = document.getElementById('printArea');
 
+function chapterWordCount(name, cats) {
+  const data = chapters[name];
+  if (!data) return 0;
+  return (cats || Object.keys(data)).reduce((sum, cat) => sum + (data[cat] ? data[cat].length : 0), 0);
+}
+
 function parseWorkbookIntoChapters(wb) {
-  const skipHeader = document.getElementById('skipHeaderCheck').checked;
-  const startRow = skipHeader ? 1 : 0;
   wb.SheetNames.forEach(sheetName => {
     const sheet = wb.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const words = [];
-    for (let i = startRow; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-      const word = (row[0] ?? '').toString().trim();
-      const meaning = (row[1] ?? '').toString().trim();
-      if (word && meaning) words.push({ word, meaning });
-    }
-    if (words.length) {
-      if (!chapters[sheetName]) chapters[sheetName] = [];
-      chapters[sheetName] = chapters[sheetName].concat(words);
+    if (!rows.length) return;
+    const headerRow = rows[0] || [];
+    const sheetCategories = {};
+    CATEGORY_COLUMN_GROUPS.forEach(([wCol, mCol]) => {
+      const catName = (headerRow[wCol] ?? '').toString().trim();
+      if (!catName) return; // 해당 열 쌍이 비어있으면 이 영역은 건너뜀
+      const words = [];
+      for (let i = 1; i < rows.length; i++) { // 2행부터 데이터
+        const row = rows[i];
+        if (!row) continue;
+        const word = (row[wCol] ?? '').toString().trim();
+        const meaning = (row[mCol] ?? '').toString().trim();
+        if (word && meaning) words.push({ word, meaning });
+      }
+      if (words.length) sheetCategories[catName] = words;
+    });
+    if (Object.keys(sheetCategories).length) {
+      if (!chapters[sheetName]) chapters[sheetName] = {};
+      Object.entries(sheetCategories).forEach(([catName, words]) => {
+        if (!categoryOrder.includes(catName)) categoryOrder.push(catName);
+        if (!chapters[sheetName][catName]) chapters[sheetName][catName] = [];
+        chapters[sheetName][catName] = chapters[sheetName][catName].concat(words);
+      });
     }
   });
 }
@@ -275,15 +313,19 @@ function parseWorkbookIntoChapters(wb) {
 function finalizeLoad(prefix) {
   const chapterNames = Object.keys(chapters);
   if (!chapterNames.length) {
-    uploadStatus.textContent = '단어를 찾지 못했어요. 시트 구조(A열 단어, B열 뜻)를 확인해주세요.';
+    uploadStatus.textContent = '단어를 찾지 못했어요. 시트 구조(1행=영역 이름, 2행부터 A:B/D:E/G:H/J:K 열에 단어·뜻)를 확인해주세요.';
     uploadStatus.className = 'status err';
     return;
   }
   selected = new Set(chapterNames);
+  selectedCategories = new Set(categoryOrder);
   renderChapters();
-  uploadStatus.textContent = `${prefix}${chapterNames.length}개 챕터, 총 ${chapterNames.reduce((s,c)=>s+chapters[c].length,0)}개 단어를 불러왔어요.`;
+  renderCategories();
+  const totalWords = chapterNames.reduce((s, c) => s + chapterWordCount(c), 0);
+  uploadStatus.textContent = `${prefix}${chapterNames.length}개 챕터, ${categoryOrder.length}개 영역, 총 ${totalWords}개 단어를 불러왔어요.`;
   uploadStatus.className = 'status ok';
   chapterCard.style.display = 'block';
+  categoryCard.style.display = 'block';
   optionCard.style.display = 'block';
 }
 
@@ -342,7 +384,7 @@ function renderChapters() {
     chip.innerHTML = `
       <input type="checkbox" ${selected.has(name) ? 'checked' : ''} data-name="${name}" />
       <span>${name}</span>
-      <span class="n">${chapters[name].length}개</span>
+      <span class="n">${chapterWordCount(name)}개</span>
     `;
     chip.querySelector('input').addEventListener('change', (e) => {
       if (e.target.checked) selected.add(name); else selected.delete(name);
@@ -367,6 +409,43 @@ document.getElementById('selectNoneBtn').addEventListener('click', () => {
   renderChapters();
 });
 
+function categoryWordCount(catName) {
+  return Object.values(chapters).reduce((sum, cats) => sum + (cats[catName] ? cats[catName].length : 0), 0);
+}
+
+function renderCategories() {
+  categoryGrid.innerHTML = '';
+  categoryOrder.forEach(catName => {
+    const chip = document.createElement('label');
+    chip.className = 'chapter-chip' + (selectedCategories.has(catName) ? ' selected' : '');
+    chip.innerHTML = `
+      <input type="checkbox" ${selectedCategories.has(catName) ? 'checked' : ''} data-name="${catName}" />
+      <span>${catName}</span>
+      <span class="n">${categoryWordCount(catName)}개</span>
+    `;
+    chip.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selectedCategories.add(catName); else selectedCategories.delete(catName);
+      chip.classList.toggle('selected', e.target.checked);
+      updateCategoryCount();
+    });
+    categoryGrid.appendChild(chip);
+  });
+  updateCategoryCount();
+}
+
+function updateCategoryCount() {
+  categoryCount.textContent = `${selectedCategories.size} / ${categoryOrder.length}개 영역 선택됨`;
+}
+
+document.getElementById('catSelectAllBtn').addEventListener('click', () => {
+  selectedCategories = new Set(categoryOrder);
+  renderCategories();
+});
+document.getElementById('catSelectNoneBtn').addEventListener('click', () => {
+  selectedCategories = new Set();
+  renderCategories();
+});
+
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -382,7 +461,11 @@ function buildQuestions() {
   const names = naturalDaySort(Array.from(selected));
   let qNo = 1;
   const chapterBlocks = names.map(name => {
-    const pool = shuffle(chapters[name]).slice(0, count);
+    const data = chapters[name] || {};
+    const wordsInSelectedCategories = Object.keys(data)
+      .filter(cat => selectedCategories.has(cat))
+      .flatMap(cat => data[cat]);
+    const pool = shuffle(wordsInSelectedCategories).slice(0, count);
     const items = pool.map(item => {
       let qType = type;
       if (type === 'mixed') qType = Math.random() < 0.5 ? 'e2k' : 'k2e';
@@ -424,7 +507,10 @@ function renderPreview(blocks) {
     html += `<ul class="q-list">`;
     block.items.forEach(q => {
       const prompt = q.type === 'e2k' ? q.word : q.meaning;
-      html += `<li><span class="no">${q.no}.</span> <span>${escapeHtml(prompt)}</span> <span class="blank"></span></li>`;
+      const hintHtml = q.type === 'k2e'
+        ? `<span class="hint-pattern">${escapeHtml(wordHintPattern(q.word))}</span>`
+        : '';
+      html += `<li><span class="no">${q.no}.</span> <span>${escapeHtml(prompt)}</span>${hintHtml} <span class="blank"></span></li>`;
     });
     html += `</ul></div>`;
   });
@@ -447,6 +533,13 @@ function renderPreview(blocks) {
   previewCard.style.display = 'block';
 }
 
+function wordHintPattern(word) {
+  // 글자 수까지 표시하면(밑줄을 단어 길이만큼 나열) 뜻이 길 때 줄바꿈이 깨지므로,
+  // 길이 정보 없이 첫 글자만 짧게 보여준다.
+  const match = word.match(/[a-zA-Z]/);
+  return match ? `(${match[0]}…)` : '';
+}
+
 function escapeHtml(str) {
   return (str ?? '').toString()
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -458,9 +551,14 @@ document.getElementById('generateBtn').addEventListener('click', () => {
     genStatus.className = 'status err';
     return;
   }
+  if (!selectedCategories.size) {
+    genStatus.textContent = '단어 영역을 최소 1개 이상 선택해주세요.';
+    genStatus.className = 'status err';
+    return;
+  }
   const blocks = buildQuestions();
   if (!blocks.length) {
-    genStatus.textContent = '선택한 챕터에 단어가 없어요.';
+    genStatus.textContent = '선택한 챕터·영역 조합에 단어가 없어요.';
     genStatus.className = 'status err';
     return;
   }
@@ -559,7 +657,8 @@ document.getElementById('printBtn').addEventListener('click', async () => {
       breaks.push(totalHeight);
     }
 
-    const scale = 2;
+    // scale 1.5면 인쇄해도 글자가 충분히 선명하면서, 2배보다 캔버스(=이미지) 용량이 훨씬 작아진다.
+    const scale = 1.5;
     const canvas = await html2canvas(exportArea, {
       scale,
       backgroundColor: '#ffffff',
@@ -567,7 +666,8 @@ document.getElementById('printBtn').addEventListener('click', async () => {
     });
 
     const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({ unit: 'px', format: [PAGE_W, PAGE_H], orientation: 'portrait' });
+    // compress: true → PDF 내부 스트림 압축. 텍스트 위주 시험지라 용량이 꽤 줄어든다.
+    const pdf = new jsPDF({ unit: 'px', format: [PAGE_W, PAGE_H], orientation: 'portrait', compress: true });
     let first = true;
     for (let i = 0; i < breaks.length - 1; i++) {
       const sliceTop = breaks[i];
@@ -583,10 +683,11 @@ document.getElementById('printBtn').addEventListener('click', async () => {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
       ctx.drawImage(canvas, 0, yScaled, canvas.width, hScaled, 0, 0, canvas.width, hScaled);
-      const dataUrl = pageCanvas.toDataURL('image/png');
+      // PNG 대신 JPEG(화질 0.82)로 저장 — 텍스트 위주 페이지에서도 PNG보다 파일 용량이 훨씬 작다.
+      const dataUrl = pageCanvas.toDataURL('image/jpeg', 0.82);
       if (!first) pdf.addPage([PAGE_W, PAGE_H], 'portrait');
       const topOffset = (i === 0) ? 0 : MARGIN_TOP;
-      pdf.addImage(dataUrl, 'PNG', 0, topOffset, PAGE_W, hScaled / scale);
+      pdf.addImage(dataUrl, 'JPEG', 0, topOffset, PAGE_W, hScaled / scale);
       first = false;
     }
 
