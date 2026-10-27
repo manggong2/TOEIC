@@ -353,7 +353,9 @@ fileInput.addEventListener('change', async (e) => {
 const DEFAULT_WORDS_FILE = 'words.xlsx';
 (async function tryAutoLoadDefault() {
   try {
-    const res = await fetch(DEFAULT_WORDS_FILE);
+    // 캐시 무효화: 쿼리에 타임스탬프를 붙이고 no-store로 요청해, 예전에 올렸던
+    // words.xlsx가 브라우저/깃허브 페이지 캐시에 남아있어도 항상 최신 파일을 받아오게 한다.
+    const res = await fetch(`${DEFAULT_WORDS_FILE}?v=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return;
     const buf = await res.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
